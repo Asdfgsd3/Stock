@@ -1,21 +1,16 @@
 import yfinance as yf
 import numpy as np
 import pandas as pd
-from flask import Flask, request, render_template
-import matplotlib.pyplot as plt
-import matplotlib
+from flask import Flask, request
+import plotly.graph_objs as go
+import plotly.offline as pyo
 import joblib
 from tensorflow.keras.models import load_model, Sequential
 from tensorflow.keras.layers import Dense, LSTM, Dropout
-import io
-import base64
 import datetime
 import os
 import logging
 from sklearn.preprocessing import MinMaxScaler
-
-# Set matplotlib backend to non-interactive
-matplotlib.use('Agg')
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +20,29 @@ app = Flask(__name__)
 @app.route('/')
 def index():
     try:
-        return render_template('index.html')
+        return '''
+            <!doctype html>
+            <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+                <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+                <title>Stock Price Prediction</title>
+            </head>
+            <body>
+                <div class="container mt-5">
+                    <h1 class="text-center">Stock Price Prediction</h1>
+                    <form action="/predict" method="post" class="mt-4">
+                        <div class="form-group">
+                            <label for="ticker">Enter Stock Ticker:</label>
+                            <input type="text" class="form-control" id="ticker" name="ticker" placeholder="AAPL" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Predict</button>
+                    </form>
+                </div>
+            </body>
+            </html>
+        '''
     except Exception as e:
         logging.error(f"Error loading index page: {str(e)}")
         return f"An error occurred while loading the index page: {str(e)}"
@@ -115,41 +132,40 @@ def predict():
         # Reverse scaling
         future_predictions = scaler_price.inverse_transform(np.array(future_predictions).reshape(-1, 1))
 
-        # Plot Predictions
+        # Create Interactive Plotly Graph
         future_dates = pd.date_range(start=data.index[-1] + datetime.timedelta(days=1), periods=len(future_predictions))
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 12), gridspec_kw={'height_ratios': [2, 1]})
-        fig.patch.set_facecolor('#f0f2f5')
 
+        fig = go.Figure()
         # Plot stock prices
-        ax1.plot(data.index[-60:], close_data.flatten()[-60:], label='Actual Prices', color='blue', linewidth=2)
-        ax1.plot(np.append(data.index[-1:], future_dates), np.concatenate((close_data[-1:].flatten(), future_predictions.flatten())), label='Future Predictions (Next 30 Days)', color='orange', linewidth=2, linestyle='--')
-        ax1.set_ylabel('Stock Price', fontsize=14, fontname='Arial')
-        ax1.set_xlabel('Date', fontsize=14, fontname='Arial')
-        ax1.legend(loc='upper left', fontsize=12, prop={'family': 'Arial'})
-        ax1.set_title(f'{ticker} Stock Price Prediction', fontsize=18, fontname='Arial')
-        ax1.grid(True, linestyle='--', linewidth=0.5)
-        ax1.set_facecolor('#ffffff')
-
-        # Plot RSI underneath the stock price graph
-        ax2.plot(data.index[-60:], data['RSI'][-60:], label='RSI', color='black', alpha=1, linewidth=1.5)
-        ax2.set_xlim(ax1.get_xlim())
-        ax2.axhline(70, color='red', linestyle='--', alpha=0.7, linewidth=1.5, label='Overbought (70)')
-        ax2.axhline(30, color='green', linestyle='--', alpha=0.7, linewidth=1.5, label='Oversold (30)')
-        ax2.set_xlabel('Date', fontsize=14, fontname='Arial')
-        ax2.set_ylabel('RSI', fontsize=14, fontname='Arial')
-        ax2.legend(loc='upper left', fontsize=12, prop={'family': 'Arial'})
-        ax2.grid(True, linestyle='--', linewidth=0.5)
-        ax2.set_facecolor('#ffffff')
-
-        plt.tight_layout()
+        fig.add_trace(go.Scatter(x=data.index[-60:], y=close_data.flatten()[-60:], mode='lines', name='Actual Prices', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(x=np.append(data.index[-1:], future_dates), y=np.concatenate((close_data[-1:].flatten(), future_predictions.flatten())), mode='lines', name='Future Predictions (Next 30 Days)', line=dict(color='orange', dash='dash')))
         
-        # Convert plot to PNG image for HTML rendering
-        img = io.BytesIO()
-        plt.savefig(img, format='png')
-        img.seek(0)
-        graph_url = base64.b64encode(img.getvalue()).decode()
+        # Plot RSI underneath the stock price graph
+        fig_rsi = go.Figure()
+        fig_rsi.add_trace(go.Scatter(x=data.index[-60:], y=data['RSI'][-60:], mode='lines', name='RSI', line=dict(color='black')))
+        fig_rsi.add_trace(go.Scatter(x=[data.index[-60], data.index[-1]], y=[70, 70], mode='lines', name='Overbought (70)', line=dict(color='red', dash='dash')))
+        fig_rsi.add_trace(go.Scatter(x=[data.index[-60], data.index[-1]], y=[30, 30], mode='lines', name='Oversold (30)', line=dict(color='green', dash='dash')))
+        
+        fig.update_layout(
+            title=f'{ticker} Stock Price Prediction',
+            xaxis_title='Date',
+            yaxis_title='Stock Price',
+            template='plotly_white'
+        )
 
-        return f'<div style="background-color: #f0f2f5; padding: 20px; text-align: center;"><h1 style="color: #007bff; font-family: Arial;">{ticker} Stock Price Prediction</h1><img src="data:image/png;base64,{graph_url}" style="max-width: 90%; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); border-radius: 10px;"></div>'
+        fig_rsi.update_layout(
+            title=f'{ticker} RSI Indicator',
+            xaxis_title='Date',
+            yaxis_title='RSI',
+            template='plotly_white'
+        )
+
+        # Generate HTML for Plotly Graph
+        graph_html = pyo.plot(fig, include_plotlyjs=False, output_type='div')
+        rsi_html = pyo.plot(fig_rsi, include_plotlyjs=False, output_type='div')
+
+        # Return the graph directly as a response
+        return f"<html><head><script src='https://cdn.plot.ly/plotly-latest.min.js'></script></head><body>{graph_html}<br>{rsi_html}</body></html>"
     except Exception as e:
         logging.error(f"Error during prediction for ticker {ticker}: {str(e)}")
         return f"An error occurred: {str(e)}"
