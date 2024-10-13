@@ -72,17 +72,32 @@
         .fa-chart-line {
             color: #007bff;
         }
+        #loading {
+            display: none;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.8);
+            z-index: 2;
+            text-align: center;
+            padding-top: 20%;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #007bff;
+        }
     </style>
 </head>
 <body>
+    <div id="loading">Loading... Please wait.</div>
     <div class="container">
         <h1><i class="fas fa-chart-line"></i> Stock Price Prediction</h1>
-        <form action="/predict" method="post">
+        <form id="predictForm" action="/predict" method="post">
             <label for="ticker">Enter Stock Ticker:</label>
             <input type="text" id="ticker" name="ticker" placeholder="e.g., AAPL, TSLA" required>
-
-            <label for="news">Enter News Headlines:</label>
-            <textarea id="news" name="news" placeholder="Provide recent news headlines related to the stock" rows="4" required></textarea>
 
             <button type="submit"><i class="fas fa-search"></i> Predict</button>
         </form>
@@ -90,5 +105,10 @@
             Powered by Machine Learning and Flask
         </footer>
     </div>
+    <script>
+        document.getElementById('predictForm').addEventListener('submit', function() {
+            document.getElementById('loading').style.display = 'block';
+        });
+    </script>
 </body>
 </html>
