@@ -18,6 +18,52 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
+class RSI:
+    def __init__(self, period):
+        self.period = period
+        self.prev_avg_gain = 0
+        self.prev_avg_loss = 0
+        self.rsi = []
+
+    def compute_moving_average(self, series):
+        if len(self.rsi) == 0:
+            sum_gain = 0
+            sum_loss = 0
+            for v1, v2 in zip(series[:-1], series[1:]):
+                if v2 > v1:
+                    sum_gain += v2 - v1
+                elif v1 > v2:
+                    sum_loss += v1 - v2
+            avg_gain = sum_gain / self.period
+            avg_loss = sum_loss / self.period
+        else:
+            if series[-1] >= series[-2]:
+                gain = series[-1] - series[-2]
+                loss = 0
+            elif series[-2] > series[-1]:
+                gain = 0
+                loss = series[-2] - series[-1]
+            avg_gain = (gain + ((self.period - 1) * self.prev_avg_gain)) / self.period
+            avg_loss = (loss + ((self.period - 1) * self.prev_avg_loss)) / self.period
+        self.prev_avg_gain = avg_gain
+        self.prev_avg_loss = avg_loss
+        return avg_gain, avg_loss
+
+    def compute_single_rsi(self, series):
+        avg_gain, avg_loss = self.compute_moving_average(series)
+        if avg_loss == 0:
+            rsi = 100
+        else:
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+    def compute_rsi(self, series):
+        self.rsi = []
+        for i in range(self.period, len(series)):
+            self.rsi.append(self.compute_single_rsi(series[i - self.period:i + 1]))
+        return self.rsi
+
 @app.route('/')
 def index():
     try:
@@ -47,7 +93,7 @@ def predict():
             file_path = os.path.join('models', file)
             if os.path.isfile(file_path):
                 file_creation_time = datetime.datetime.fromtimestamp(os.path.getctime(file_path))
-                if (now - file_creation_time).days > 1:
+                if (now - file_creation_time).total_seconds() > 1:
                     os.remove(file_path)
                     logging.info(f"Removed old file: {file_path}")
 
@@ -57,9 +103,10 @@ def predict():
         pe_ratio = stock.info.get('trailingPE', np.nan)
         data['PE_Ratio'] = pe_ratio
         if data.empty:
-            logging.warning(f"No historical data available for ticker: {ticker}")
-            return f"No historical data available for the ticker: {ticker}. Please enter a valid ticker."
-        data['RSI'] = calculate_rsi(data)
+            data = stock.history(period='max')
+            
+        rsi_calculator = RSI(period=14)
+        data['RSI'] = rsi_calculator.compute_rsi(data['Close'].values)
         data['SMA_50'] = data['Close'].rolling(window=50).mean()
         data['SMA_200'] = data['Close'].rolling(window=200).mean()
         data['MFI'] = calculate_mfi(data)
@@ -191,18 +238,6 @@ def predict():
         logging.error(f"Error during prediction for ticker {ticker}: {str(e)}")
         return f"An error occurred: {str(e)}"
 
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff(1)
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-
-    avg_gain = gain.rolling(window=window, min_periods=1).mean()
-    avg_loss = loss.rolling(window=window, min_periods=1).mean()
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
 def calculate_mfi(data, window=14):
     typical_price = (data['High'] + data['Low'] + data['Close']) / 3
     money_flow = typical_price * data['Volume']
@@ -218,17 +253,17 @@ def calculate_mfi(data, window=14):
 def train_model(ticker):
     # Fetch Historical Stock Data
     stock = yf.Ticker(ticker)
-    data = stock.history(period="5y")
+    data = stock.history(period='5y')
     if data.empty:
-        logging.error(f"No historical data available for ticker: {ticker}")
-        raise ValueError(f"No historical data available for the ticker: {ticker}")
-    data['RSI'] = calculate_rsi(data)
+        data = stock.history(period='max')
+    rsi_calculator = RSI(period=14)
+    data['RSI'] = rsi_calculator.compute_rsi(data['Close'].values)
     data['SMA_50'] = data['Close'].rolling(window=50).mean()
     data['SMA_200'] = data['Close'].rolling(window=200).mean()
     data['PE_Ratio'] = stock.info.get('trailingPE', np.nan)
     data['MFI'] = calculate_mfi(data)
     data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'PE_Ratio', 'MFI'], inplace=True)
-    if len(data) < 60:
+    if len(data) < 50:
         logging.error(f"Not enough historical data for ticker: {ticker} to train the model.")
         raise ValueError(f"Not enough historical data available for the ticker: {ticker} to train the model.")
     
