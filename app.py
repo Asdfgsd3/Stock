@@ -101,16 +101,16 @@ def predict():
         stock = yf.Ticker(ticker)
         data = stock.history(period='5y')
         pe_ratio = stock.info.get('trailingPE', np.nan)
-        data['PE_Ratio'] = pe_ratio
+        data['PE_Ratio'] = pe_ratio if not np.isnan(pe_ratio) else np.nan
         if data.empty:
             data = stock.history(period='max')
             
         rsi_calculator = RSI(period=14)
-        data['RSI'] = rsi_calculator.compute_rsi(data['Close'].values)
+        data['RSI'] = pd.Series(rsi_calculator.compute_rsi(data['Close'].values), index=data.index[14:])
         data['SMA_50'] = data['Close'].rolling(window=50).mean()
         data['SMA_200'] = data['Close'].rolling(window=200).mean()
         data['MFI'] = calculate_mfi(data)
-        data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'PE_Ratio', 'MFI'], inplace=True)
+        data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'MFI'], inplace=True)
         if len(data) < 60:
             logging.warning(f"Not enough historical data for ticker: {ticker}")
             return f"Not enough historical data available for the ticker: {ticker} to make predictions."
@@ -257,13 +257,14 @@ def train_model(ticker):
     if data.empty:
         data = stock.history(period='max')
     rsi_calculator = RSI(period=14)
-    data['RSI'] = rsi_calculator.compute_rsi(data['Close'].values)
+    data['RSI'] = pd.Series(rsi_calculator.compute_rsi(data['Close'].values), index=data.index[14:])
     data['SMA_50'] = data['Close'].rolling(window=50).mean()
     data['SMA_200'] = data['Close'].rolling(window=200).mean()
-    data['PE_Ratio'] = stock.info.get('trailingPE', np.nan)
+    pe_ratio = stock.info.get('trailingPE', np.nan)
+    data['PE_Ratio'] = pe_ratio if not np.isnan(pe_ratio) else pd.Series([np.nan] * len(data), index=data.index)
     data['MFI'] = calculate_mfi(data)
-    data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'PE_Ratio', 'MFI'], inplace=True)
-    if len(data) < 50:
+    data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'MFI'], inplace=True)
+    if len(data) < 60:
         logging.error(f"Not enough historical data for ticker: {ticker} to train the model.")
         raise ValueError(f"Not enough historical data available for the ticker: {ticker} to train the model.")
     
