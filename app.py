@@ -80,7 +80,6 @@ def predict():
         scaler_price_path = f'models/{ticker}_scaler_price.pkl'
         scaler_rsi_path = f'models/{ticker}_scaler_rsi.pkl'
         scaler_sma_path = f'models/{ticker}_scaler_sma.pkl'
-        scaler_pe_path = f'models/{ticker}_scaler_pe.pkl'
         scaler_mfi_path = f'models/{ticker}_scaler_mfi.pkl'
 
         # Create models directory if it doesn't exist
@@ -100,8 +99,6 @@ def predict():
         # Fetch Historical Data
         stock = yf.Ticker(ticker)
         data = stock.history(period='5y')
-        pe_ratio = stock.info.get('trailingPE', np.nan)
-        data['PE_Ratio'] = pe_ratio if not np.isnan(pe_ratio) else np.nan
         if data.empty:
             data = stock.history(period='max')
             
@@ -119,11 +116,10 @@ def predict():
         rsi_data = data['RSI'].values.reshape(-1, 1)
         sma_50_data = data['SMA_50'].values.reshape(-1, 1)
         sma_200_data = data['SMA_200'].values.reshape(-1, 1)
-        pe_ratio_data = data['PE_Ratio'].values.reshape(-1, 1)
         mfi_data = data['MFI'].values.reshape(-1, 1)
 
         # Check if model and scaler exist, if not train a new model
-        if not os.path.exists(model_path) or not os.path.exists(scaler_price_path) or not os.path.exists(scaler_rsi_path) or not os.path.exists(scaler_sma_path) or not os.path.exists(scaler_pe_path) or not os.path.exists(scaler_mfi_path):
+        if not os.path.exists(model_path) or not os.path.exists(scaler_price_path) or not os.path.exists(scaler_rsi_path) or not os.path.exists(scaler_sma_path) or not os.path.exists(scaler_mfi_path):
             logging.info(f"Training new model for ticker: {ticker}")
             train_model(ticker)
 
@@ -131,7 +127,6 @@ def predict():
         scaler_price = joblib.load(scaler_price_path)
         scaler_rsi = joblib.load(scaler_rsi_path)
         scaler_sma = joblib.load(scaler_sma_path)
-        scaler_pe = joblib.load(scaler_pe_path)
         scaler_mfi = joblib.load(scaler_mfi_path)
 
         # Prepare Input for Future Prediction
@@ -139,14 +134,12 @@ def predict():
         scaled_rsi_data = scaler_rsi.transform(rsi_data)
         scaled_sma_50_data = scaler_sma.transform(sma_50_data)
         scaled_sma_200_data = scaler_sma.transform(sma_200_data)
-        scaled_pe_data = scaler_pe.transform(pe_ratio_data)
         scaled_mfi_data = scaler_mfi.transform(mfi_data)
 
         last_60_days_close = scaled_close_data[-60:]
         last_60_days_rsi = scaled_rsi_data[-60:]
         last_60_days_sma_50 = scaled_sma_50_data[-60:]
         last_60_days_sma_200 = scaled_sma_200_data[-60:]
-        last_60_days_pe = scaled_pe_data[-60:]
         last_60_days_mfi = scaled_mfi_data[-60:]
 
         if len(last_60_days_close) < 60:
@@ -155,11 +148,10 @@ def predict():
             last_60_days_rsi = np.pad(last_60_days_rsi, ((padding, 0), (0, 0)), 'constant', constant_values=0)
             last_60_days_sma_50 = np.pad(last_60_days_sma_50, ((padding, 0), (0, 0)), 'constant', constant_values=0)
             last_60_days_sma_200 = np.pad(last_60_days_sma_200, ((padding, 0), (0, 0)), 'constant', constant_values=0)
-            last_60_days_pe = np.pad(last_60_days_pe, ((padding, 0), (0, 0)), 'constant', constant_values=0)
             last_60_days_mfi = np.pad(last_60_days_mfi, ((padding, 0), (0, 0)), 'constant', constant_values=0)
 
-        last_60_days = np.hstack((last_60_days_close, last_60_days_rsi, last_60_days_sma_50, last_60_days_sma_200, last_60_days_pe, last_60_days_mfi))
-        future_input = last_60_days.reshape(1, 60, 6)
+        last_60_days = np.hstack((last_60_days_close, last_60_days_rsi, last_60_days_sma_50, last_60_days_sma_200, last_60_days_mfi))
+        future_input = last_60_days.reshape(1, 60, 5)
 
         # Predict Future Values (Next 30 Days)
         future_predictions = []
@@ -168,7 +160,7 @@ def predict():
         for _ in range(30):
             predicted_price = model.predict(future_input)
             future_predictions.append(predicted_price[0, 0])
-            predicted_value = np.array([predicted_price[0, 0], last_60_days_rsi[-1][0], last_60_days_sma_50[-1][0], last_60_days_sma_200[-1][0], last_60_days_pe[-1][0], last_60_days_mfi[-1][0]]).reshape(1, 1, 6)
+            predicted_value = np.array([predicted_price[0, 0], last_60_days_rsi[-1][0], last_60_days_sma_50[-1][0], last_60_days_sma_200[-1][0], last_60_days_mfi[-1][0]]).reshape(1, 1, 5)
             future_input = np.append(future_input[:, 1:, :], predicted_value, axis=1)
             current_date += datetime.timedelta(days=1)
 
@@ -260,8 +252,6 @@ def train_model(ticker):
     data['RSI'] = pd.Series(rsi_calculator.compute_rsi(data['Close'].values), index=data.index[14:])
     data['SMA_50'] = data['Close'].rolling(window=50).mean()
     data['SMA_200'] = data['Close'].rolling(window=200).mean()
-    pe_ratio = stock.info.get('trailingPE', np.nan)
-    data['PE_Ratio'] = pe_ratio if not np.isnan(pe_ratio) else pd.Series([np.nan] * len(data), index=data.index)
     data['MFI'] = calculate_mfi(data)
     data.dropna(subset=['RSI', 'SMA_50', 'SMA_200', 'MFI'], inplace=True)
     if len(data) < 60:
@@ -272,20 +262,17 @@ def train_model(ticker):
     rsi_data = data['RSI'].values.reshape(-1, 1)
     sma_50_data = data['SMA_50'].values.reshape(-1, 1)
     sma_200_data = data['SMA_200'].values.reshape(-1, 1)
-    pe_ratio_data = data['PE_Ratio'].values.reshape(-1, 1)
     mfi_data = data['MFI'].values.reshape(-1, 1)
 
     # Preprocess Data
     scaler_price = MinMaxScaler(feature_range=(0, 1))
     scaler_rsi = MinMaxScaler(feature_range=(0, 1))
     scaler_sma = MinMaxScaler(feature_range=(0, 1))
-    scaler_pe = MinMaxScaler(feature_range=(0, 1))
     scaler_mfi = MinMaxScaler(feature_range=(0, 1))
     scaled_close_data = scaler_price.fit_transform(close_data)
     scaled_rsi_data = scaler_rsi.fit_transform(rsi_data)
     scaled_sma_50_data = scaler_sma.fit_transform(sma_50_data)
     scaled_sma_200_data = scaler_sma.fit_transform(sma_200_data)
-    scaled_pe_data = scaler_pe.fit_transform(pe_ratio_data)
     scaled_mfi_data = scaler_mfi.fit_transform(mfi_data)
 
     time_step = 60
@@ -295,7 +282,6 @@ def train_model(ticker):
                             scaled_rsi_data[i:(i + time_step), 0].reshape(-1, 1),
                             scaled_sma_50_data[i:(i + time_step), 0].reshape(-1, 1),
                             scaled_sma_200_data[i:(i + time_step), 0].reshape(-1, 1),
-                            scaled_pe_data[i:(i + time_step), 0].reshape(-1, 1),
                             scaled_mfi_data[i:(i + time_step), 0].reshape(-1, 1))))
         y.append(scaled_close_data[i + time_step, 0])
     X, y = np.array(X), np.array(y)
@@ -306,12 +292,12 @@ def train_model(ticker):
     y_train, y_test = y[:train_size], y[train_size:]
 
     # Reshape for LSTM
-    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 6)
-    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 6)
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 5)
+    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 5)
 
     # Build and Train LSTM Model
     model = Sequential()
-    model.add(LSTM(100, return_sequences=True, input_shape=(time_step, 6)))
+    model.add(LSTM(100, return_sequences=True, input_shape=(time_step, 5)))
     model.add(Dropout(0.2))
     model.add(LSTM(100, return_sequences=True))
     model.add(Dropout(0.2))
@@ -326,7 +312,6 @@ def train_model(ticker):
     joblib.dump(scaler_price, f'models/{ticker}_scaler_price.pkl')
     joblib.dump(scaler_rsi, f'models/{ticker}_scaler_rsi.pkl')
     joblib.dump(scaler_sma, f'models/{ticker}_scaler_sma.pkl')
-    joblib.dump(scaler_pe, f'models/{ticker}_scaler_pe.pkl')
     joblib.dump(scaler_mfi, f'models/{ticker}_scaler_mfi.pkl')
 
     logging.info(f"Model and Scaler for {ticker} saved.")
